@@ -159,24 +159,28 @@ class RetrieveRequest(BaseModel):
 @app.post("/retrieve")
 async def retrieve_chunks(request: RetrieveRequest):
     """
-    Retrieve chunks using hybrid approach:
-    1. Direct semantic search (top 3)
-    2. Entity-based search with semantic ranking (top 3)
-    3. Combine and deduplicate (min 3, max 6)
+    Hybrid Retrieval: Combines two scenarios for optimal results
+
+    **Scenario 1 (Direct Semantic)**: 5 chunks
+    - Step 1: Semantic search on ALL documents → top 3
+    - Step 2: Extract document_ids from those 3 chunks
+    - Step 3: Semantic search ONLY within those documents → top 5
+
+    **Scenario 2 (Entity-filtered)**: 3 chunks
+    - Step 1: Extract entities from query (persons, orgs, dates, etc.)
+    - Step 2: Find documents containing those entities
+    - Step 3: Semantic search within entity-matched documents → top 3
+
+    **Final**: Combine and deduplicate → Max 8 unique chunks
 
     - **query**: The search query
-    - **min_chunks**: Minimum number of chunks to return (default: 3)
-    - **max_chunks**: Maximum number of chunks to return (default: 6)
     """
     if not retrieval_service:
         raise HTTPException(status_code=503, detail="Retrieval service not initialized")
 
     try:
-        results = retrieval_service.retrieve(
-            query=request.query,
-            min_chunks=request.min_chunks,
-            max_chunks=request.max_chunks
-        )
+        # Use Hybrid approach (Scenario 1 + Scenario 2)
+        results = retrieval_service.retrieve_hybrid(query=request.query)
         return results
 
     except Exception as e:

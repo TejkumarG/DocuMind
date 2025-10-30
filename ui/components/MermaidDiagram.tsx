@@ -26,8 +26,8 @@ export default function MermaidDiagram({ chart, id = 'mermaid-diagram' }: Mermai
         mainBkg: '#f8fafc',
         secondBkg: '#e0e7ff',
         tertiaryBkg: '#fce7f3',
-        fontSize: '14px',
-        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        fontSize: '15px',
+        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       },
       flowchart: {
         curve: 'basis',

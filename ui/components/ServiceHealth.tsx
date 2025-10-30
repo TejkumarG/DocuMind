@@ -12,24 +12,27 @@ interface ServiceStatus {
 }
 
 export default function ServiceHealth() {
+  const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || 'http://localhost:8000'
+  const reasoningApiUrl = process.env.NEXT_PUBLIC_REASONING_API_URL || 'http://localhost:8001'
+
   const [services, setServices] = useState<ServiceStatus[]>([
     {
       name: 'RAG Service',
-      url: 'http://localhost:8000',
+      url: ragApiUrl,
       status: 'checking',
       description: 'Document ingestion & retrieval with Milvus vector database',
       port: 8000
     },
     {
       name: 'Reasoning API',
-      url: 'http://localhost:8001',
+      url: reasoningApiUrl,
       status: 'checking',
       description: 'DSPy-powered AI reasoning with GPT-4o-mini (2-stage pipeline)',
       port: 8001
     },
     {
       name: 'Milvus Database',
-      url: 'http://localhost:8000/milvus-health',
+      url: `${ragApiUrl}/milvus-health`,
       status: 'checking',
       description: 'Vector database for ultra-fast semantic search',
       port: 19530

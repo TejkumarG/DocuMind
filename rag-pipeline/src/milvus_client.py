@@ -141,3 +141,22 @@ class MilvusClient:
                           "location_names", "organization_names", "date_entities", "other_entities"]
         )
         return results
+
+    def query_all(self, output_fields: List[str] = None, limit: int = 16384):
+        """Query ALL chunks without any filters (for entity-based filtering in Python)"""
+        if not self.collection:
+            raise Exception("Collection not initialized")
+
+        self.collection.load()
+
+        if output_fields is None:
+            output_fields = ["id", "document_id", "page_number", "text", "person_names",
+                           "location_names", "organization_names", "date_entities", "other_entities"]
+
+        # Query all chunks (Milvus limit is 16384 per query)
+        results = self.collection.query(
+            expr="id > 0",  # Match all records
+            output_fields=output_fields,
+            limit=limit
+        )
+        return results

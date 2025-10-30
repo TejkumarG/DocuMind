@@ -208,6 +208,8 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://chatuser:chatpass@postgres:5432/chat_history?schema=public
+    env_file:
+      - ./ui/.env
     networks:
       - app-network
 

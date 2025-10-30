@@ -60,209 +60,310 @@ Chunk = {
 
 ---
 
-## 2. RETRIEVAL FLOW (Hybrid Approach)
+## 2. HYBRID RETRIEVAL FLOW (Two Parallel Scenarios)
 
 ```mermaid
 flowchart TD
-    Query([🔍 User Query]) --> Parallel{Parallel Processing}
+    Query([🔍 User Query]) --> Parallel{Run Both Scenarios<br/>in Parallel}
 
-    %% Semantic Search Branch
-    Parallel --> Semantic[Path 1: Semantic Search]
-    Semantic --> EmbedQ1[🤖 Sentence Transformer<br/>all-MiniLM-L6-v2]
-    EmbedQ1 --> Vector1[Generate Query<br/>Embedding 384-dim]
-    Vector1 --> MilvusS[Milvus Vector Search<br/>L2 Distance]
-    MilvusS --> TopS[Top 3 Chunks<br/>by Similarity]
+    %% Scenario 1: Direct Semantic
+    Parallel --> S1[Scenario 1:<br/>Direct Semantic]
+    S1 --> S1_Embed[Step 1: 🤖 Embed query<br/>384-dim vector]
+    S1_Embed --> S1_Search[Step 2: Milvus search<br/>on ALL documents]
+    S1_Search --> S1_Top3[Get top 3 chunks]
+    S1_Top3 --> S1_Docs[Extract document_ids<br/>from those 3]
+    S1_Docs --> S1_Step3[Step 3: Milvus search<br/>ONLY in those documents]
+    S1_Step3 --> S1_Result[Get top 5 chunks]
 
-    %% Entity Search Branch
-    Parallel --> Entity[Path 2: Entity Search]
-    Entity --> NERQ[🤖 spaCy NER<br/>en_core_web_md]
-    NERQ --> ExtractQ[Extract Query Entities<br/>Convert to Lowercase]
-    ExtractQ --> HasEnt{Has<br/>Entities?}
-    HasEnt -->|No| EmptyE([Return Empty])
-    HasEnt -->|Yes| EmbedQ2[🤖 Sentence Transformer<br/>all-MiniLM-L6-v2]
-    EmbedQ2 --> Vector2[Generate Query<br/>Embedding 384-dim]
-    Vector2 --> MilvusE[Milvus Vector Search<br/>Get Top 15 Candidates]
-    MilvusE --> Filter[Python Filter:<br/>Match query entities with<br/>chunk entities<br/>Case-insensitive substring]
-    Filter --> RankE[Rank by Semantic<br/>Similarity L2 Distance]
-    RankE --> TopE[Top 3 Chunks<br/>with Entity Match]
+    %% Scenario 2: Entity-based
+    Parallel --> S2[Scenario 2:<br/>Entity-based]
+    S2 --> S2_NER[🤖 spaCy NER<br/>Extract entities]
+    S2_NER --> S2_Has{Has<br/>Entities?}
+    S2_Has -->|No| S2_Empty([0 chunks])
+    S2_Has -->|Yes| S2_Query[Query ALL chunks<br/>from Milvus<br/>NO semantic search]
+    S2_Query --> S2_All[Get ALL 900+ chunks]
+    S2_All --> S2_Filter[Python filter:<br/>Match entities<br/>Count matches per chunk]
+    S2_Filter --> S2_Found[124 entity-matched<br/>chunks found]
+    S2_Found --> S2_Sort[Sort by entity<br/>match count]
+    S2_Sort --> S2_Top2[Top 2 entity chunks]
+    S2_Top2 --> S2_AllDocs[Extract document_ids<br/>from ALL 124 chunks]
+    S2_AllDocs --> S2_Dedup[Deduplicate:<br/>18 unique documents]
+    S2_Dedup --> S2_Semantic[Semantic search<br/>within those 18 docs]
+    S2_Semantic --> S2_Top2More[Top 2 semantic chunks]
+    S2_Top2 --> S2_Combine[Combine]
+    S2_Top2More --> S2_Combine
+    S2_Combine --> S2_Result[4 chunks<br/>2 entity + 2 semantic]
 
-    %% Combine Results
-    TopS --> Combine[Combine Results]
-    TopE --> Combine
-    EmptyE --> Combine
+    %% Final Combination
+    S1_Result --> Final[Combine Results]
+    S2_Result --> Final
+    S2_Empty --> Final
 
-    Combine --> Dedup[Deduplicate by Chunk ID]
-    Dedup --> Limit[Apply Limits:<br/>Min: 3 chunks<br/>Max: 6 chunks]
-    Limit --> Final([✅ Return Results])
+    Final --> Dedup[Deduplicate by ID]
+    Dedup --> Sort[Sort by distance]
+    Sort --> Return([✅ Return 6-9 chunks])
 
-    style EmbedQ1 fill:#99ccff
-    style EmbedQ2 fill:#99ccff
-    style NERQ fill:#ff9999
-    style Filter fill:#ffcc99
-    style Final fill:#99ff99
-```
-
-### Retrieval Response Structure
-```
-Response = {
-    query: string,
-    total_results: int,
-    semantic_count: int,
-    entity_count: int,
-    chunks: [
-        {
-            id: int,
-            distance: float,
-            document_id: string,
-            page_number: int,
-            text: string,
-            person_names: string[],
-            location_names: string[],
-            organization_names: string[],
-            date_entities: string[],
-            other_entities: string[],
-            source: "semantic_search" | "entity_search"
-        }
-    ]
-}
+    style S1_Embed fill:#99ccff
+    style S2_NER fill:#ff9999
+    style S2_Filter fill:#ffcc99
+    style Return fill:#99ff99
 ```
 
 ---
 
-## 3. ENTITY MATCHING LOGIC
+## 3. SCENARIO COMPARISON
+
+### Scenario 1: Direct Semantic (Pure Vector Search)
+```
+Flow: Semantic → Document Expansion → Semantic
+Purpose: Find semantically similar content
+```
+
+**Steps:**
+1. Semantic search on ALL documents → top 3 chunks
+2. Extract document_ids from those 3 chunks
+3. Semantic search ONLY within those documents → top 5 chunks
+4. **Return: 5 chunks**
+
+**Characteristics:**
+- ✅ Finds semantically similar content
+- ✅ Fast and efficient
+- ❌ May miss exact entity matches if semantically distant
+- Uses: Vector embeddings only
+
+---
+
+### Scenario 2: Entity-based (Entity → Documents → Semantic)
+```
+Flow: Entity Filter → Document Expansion → Semantic
+Purpose: Find exact entity matches, then expand context
+```
+
+**Steps:**
+1. Extract entities from query using spaCy NER
+2. Query **ALL chunks** from Milvus (no semantic search!)
+3. Filter in Python: Match query entities with chunk entities
+4. Count entity matches per chunk
+5. Sort by entity match count (most matches first)
+6. Take top 2 entity-matched chunks
+7. Extract document_ids from **ALL** entity-matched chunks (e.g., 124 chunks → 18 documents)
+8. Semantic search within those 18 documents → top 2 chunks
+9. **Return: 4 chunks (2 entity + 2 semantic)**
+
+**Characteristics:**
+- ✅ Guarantees entity presence in results
+- ✅ Finds documents with most entity matches
+- ✅ Expands to related context via semantic search
+- ❌ Slower (processes all chunks)
+- ❌ Returns 0 chunks if no entities in query
+- Uses: Entity matching first, then vector embeddings for expansion
+
+---
+
+## 4. ENTITY MATCHING LOGIC
 
 ```mermaid
 flowchart TD
-    QEntity[Query Entity:<br/>'bethany shay'] --> Clean[Strip Parentheses<br/>'bethany shay']
+    Start([Query Entity:<br/>'CARDINAL:40 million']) --> Strip[Strip prefix<br/>'40 million']
 
-    CEntity[Chunk Entity:<br/>'bethany shay (hr director)'] --> Clean2[Already Lowercase]
+    AllChunks[ALL 900 Chunks<br/>from Milvus] --> Loop[For each chunk]
 
-    Clean --> Match{Substring<br/>Match?}
-    Clean2 --> Match
+    Loop --> Parse[Parse entity fields:<br/>person_names, locations,<br/>orgs, dates, others]
 
-    Match -->|'bethany shay' in<br/>'bethany shay (hr director)'| Found([✅ Match Found])
-    Match -->|OR<br/>'bethany shay (hr director)' in<br/>'bethany shay'| Found
-    Match -->|No Match| Next([Try Next Entity])
+    Strip --> Match{Substring<br/>Match?}
+    Parse --> Match
+
+    Match -->|'40 million' found in<br/>chunk['other_entities']| Count[entity_match_count += 1]
+    Match -->|No match| Next[Next chunk]
+
+    Count --> Store[Store chunk with<br/>entity_match_count]
+    Store --> Continue{More<br/>chunks?}
+    Continue -->|Yes| Loop
+    Continue -->|No| Sort[Sort by<br/>entity_match_count DESC]
+
+    Sort --> Result([124 chunks with<br/>entity matches])
 
     style Match fill:#ffcc99
-    style Found fill:#99ff99
+    style Result fill:#99ff99
 ```
 
 ### Entity Matching Rules
-1. **Extract from Query**: spaCy NER with capitalization → lowercase
-2. **Extract from Chunks** (during ingestion): spaCy NER with capitalization → lowercase
-3. **Matching**: Case-insensitive substring matching in Python
-4. **Parentheses**: Strip from query entities (e.g., "Ram Raj (Ram)" → "Ram Raj")
-5. **Bidirectional**: Check if A in B OR B in A
+1. **Extract from Query**: spaCy NER → lowercase
+2. **Get ALL Chunks**: Query Milvus without vector search
+3. **Count Matches**: For each chunk, count how many query entities match
+4. **Sort**: By entity count (descending), NOT by semantic distance
+5. **Bidirectional**: Check if query_entity in chunk_entity OR chunk_entity in query_entity
+6. **Case-insensitive**: All entities normalized to lowercase
 
 ---
 
-## 4. SYSTEM ARCHITECTURE
+## 5. FINAL COMBINATION & DEDUPLICATION
 
 ```mermaid
 flowchart LR
+    S1[Scenario 1<br/>5 chunks] --> Pool[Combined Pool]
+    S2[Scenario 2<br/>4 chunks] --> Pool
+
+    Pool --> Dedup[Deduplicate<br/>by chunk ID]
+    Dedup --> Unique[6-9 unique chunks]
+    Unique --> Sort[Sort by<br/>semantic distance]
+    Sort --> Final([Final Results])
+
+    style Pool fill:#ffcc99
+    style Final fill:#99ff99
+```
+
+**Deduplication Logic:**
+- If same chunk appears in both scenarios, keep only one
+- Typical result: 6 unique chunks (some overlap between scenarios)
+- Maximum: 9 unique chunks (no overlap)
+
+---
+
+## 6. KEY DIFFERENCES: Old vs New
+
+### OLD Implementation ❌
+```
+Scenario 2: Entity-based
+├─ Semantic search first (top 100 candidates)
+├─ Filter those 100 for entity matches
+└─ Problem: If entity-matched chunk is ranked #250 semantically,
+            it never gets checked!
+```
+
+### NEW Implementation ✅
+```
+Scenario 2: Entity-based
+├─ Query ALL chunks (no semantic search!)
+├─ Filter ALL chunks for entity matches
+├─ Sort by entity match count
+└─ Success: Finds all entity matches regardless of semantic ranking
+```
+
+---
+
+## 7. EXAMPLE QUERY FLOW
+
+**Query**: "The purchase price for the Property IS 40 MILLION, WHAT IS THE NAME OF PROPERTY?"
+
+### Execution Trace
+
+```
+SCENARIO 1 (Direct Semantic)
+├─ Embed query → [0.123, -0.456, ..., 0.789]
+├─ Milvus search ALL docs → top 3 chunks
+│  └─ PSA_Harlow, Purchaser Statement
+├─ Extract document_ids → 2 documents
+├─ Milvus search in those 2 docs → top 5 chunks
+└─ Result: 5 chunks (from 2 documents)
+
+SCENARIO 2 (Entity-based)
+├─ spaCy NER → Extract: ["CARDINAL:40 million"]
+├─ Query ALL chunks from Milvus → 900 chunks
+├─ Python filter: Match "40 million" in entity fields
+│  └─ Found: 124 chunks with "40 million"
+├─ Sort by entity_match_count → All have count=1
+├─ Take top 2 entity chunks → Chunk A, Chunk B
+├─ Extract document_ids from ALL 124 chunks → 18 unique documents
+├─ Milvus semantic search in those 18 docs → top 2 chunks
+└─ Result: 4 chunks (2 entity + 2 semantic from 18 documents)
+
+COMBINATION
+├─ Scenario 1: 5 chunks (from 2 documents)
+├─ Scenario 2: 4 chunks (from 18 documents)
+├─ Deduplicate: 6 unique chunks (3 overlaps)
+└─ Return: 6 chunks sorted by distance
+```
+
+### Actual Logs
+```
+INFO: Retrieved 900 total chunks for entity filtering
+INFO: Found 124 entity-matched chunks
+INFO: Scenario 2: Found 100 total entity-matched chunks
+INFO: Scenario 2: Selected top 2 entity chunks
+INFO: Scenario 2: Found entities in 18 unique documents from 100 chunks
+INFO: Scenario 2: Doing semantic search across ALL chunks from 18 documents
+INFO: Scenario 2: Returning 4 chunks (2 entity + 2 document)
+INFO: === Hybrid Retrieval Complete: 6 unique chunks (max 9) ===
+```
+
+---
+
+## 8. SYSTEM ARCHITECTURE
+
+```mermaid
+flowchart TB
     Client([Client]) --> FastAPI[FastAPI Service<br/>Port 8000]
 
-    FastAPI --> Ingest[Ingestion Service]
-    FastAPI --> Retrieve[Retrieval Service]
+    FastAPI --> |POST /ingest| Ingest[Ingestion Service]
+    FastAPI --> |POST /retrieve| Retrieve[Retrieval Service]
 
     Ingest --> ST1[🤖 Sentence Transformer<br/>all-MiniLM-L6-v2]
     Ingest --> NER1[🤖 spaCy<br/>en_core_web_md]
-    Retrieve --> ST2[🤖 Sentence Transformer<br/>all-MiniLM-L6-v2]
-    Retrieve --> NER2[🤖 spaCy<br/>en_core_web_md]
 
-    ST1 --> Milvus[(Milvus Vector DB<br/>IVF_FLAT Index<br/>L2 Distance)]
+    Retrieve --> Hybrid{Hybrid Retrieval}
+    Hybrid --> Scenario1[Scenario 1:<br/>Direct Semantic]
+    Hybrid --> Scenario2[Scenario 2:<br/>Entity-based]
+
+    Scenario1 --> ST2[🤖 Sentence Transformer]
+    Scenario2 --> NER2[🤖 spaCy NER]
+    Scenario2 --> ST3[🤖 Sentence Transformer]
+
+    ST1 --> Milvus[(Milvus Vector DB<br/>900+ chunks<br/>L2 Distance)]
     NER1 --> Milvus
     ST2 --> Milvus
     NER2 --> Milvus
+    ST3 --> Milvus
 
     Milvus --> Etcd[(etcd<br/>Metadata)]
     Milvus --> MinIO[(MinIO<br/>Storage)]
 
-    Milvus --> Attu[Attu GUI<br/>Port 8001]
+    Milvus --> Attu[Attu GUI<br/>Port 3001]
 
     style ST1 fill:#99ccff
     style ST2 fill:#99ccff
+    style ST3 fill:#99ccff
     style NER1 fill:#ff9999
     style NER2 fill:#ff9999
     style Milvus fill:#99ff99
+    style Hybrid fill:#ffcc99
 ```
 
 ---
 
-## 5. KEY INSIGHTS
+## 9. PERFORMANCE CHARACTERISTICS
 
-### Why Same Models Matter
-- **Embedding Model**: Both ingestion and retrieval use `all-MiniLM-L6-v2` to ensure vector space alignment
-- **NER Model**: Both use `en_core_web_md` to ensure consistent entity extraction
-- **Normalization**: Both lowercase entities for case-insensitive matching
-
-### Hybrid Search Benefits
-1. **Semantic Search**: Catches similar meaning even without exact entity matches
-2. **Entity Search**: Ensures specific entities (names, dates) are found
-3. **Deduplication**: Removes overlap between the two approaches
-4. **Ranking**: Uses semantic similarity (L2 distance) for final ordering
-
-### Milvus Limitations & Workarounds
-- ❌ No substring/wildcard matching (`%value%` not supported)
-- ✅ Solution: Fetch candidates via vector search, filter in Python
-- ❌ No case-insensitive search
-- ✅ Solution: Normalize all entities to lowercase during ingestion
+| Aspect | Scenario 1 (Semantic) | Scenario 2 (Entity-based) |
+|--------|----------------------|---------------------------|
+| **Speed** | Fast (2 Milvus searches) | Slower (query all + Python filter) |
+| **Recall** | Good for semantic similarity | Excellent for entity matches |
+| **Precision** | May miss exact entities | Guarantees entity presence |
+| **Chunk Count** | Always 5 chunks | 0-4 chunks (0 if no entities) |
+| **Use Case** | "What is X about?" | "Find documents with X entity" |
 
 ---
 
-## 6. EXAMPLE QUERY FLOW
+## 10. KEY INSIGHTS
 
-**Query**: "What did Bethany Shay do in June 2022?"
+### Why Two Scenarios Work Better Together
+1. **Scenario 1**: Catches semantically similar content even without exact matches
+2. **Scenario 2**: Ensures specific entities (names, numbers, dates) are found
+3. **Combination**: Best of both worlds - semantic understanding + entity precision
+4. **Deduplication**: Removes overlaps between scenarios
 
-### Step-by-Step Execution
+### Why Entity-First Matters
+- Entity extraction is NOT semantic - it's pattern-based
+- "40 million" in one document may be semantically distant from query
+- But we MUST find it if it's an exact entity match
+- Solution: Filter by entity FIRST, semantic search SECOND (only for document expansion)
 
-```
-1. SEMANTIC SEARCH (Path 1)
-   ├─ Encode query → [0.123, -0.456, ..., 0.789] (384-dim)
-   ├─ Milvus search → Top 3 chunks by L2 distance
-   └─ Result: 3 chunks
-
-2. ENTITY SEARCH (Path 2)
-   ├─ spaCy NER → Extract entities
-   │  ├─ PERSON: ["bethany shay"]
-   │  └─ DATE: ["june 2022"]
-   ├─ Encode query → [0.123, -0.456, ..., 0.789] (384-dim)
-   ├─ Milvus search → Top 15 candidates
-   ├─ Python filter → Match entities
-   │  ├─ Check: "bethany shay" in chunk.person_names?
-   │  └─ Check: "june 2022" in chunk.date_entities?
-   ├─ Rank by L2 distance
-   └─ Result: 2 chunks (with entity matches)
-
-3. COMBINE & DEDUPLICATE
-   ├─ Total: 5 chunks (3 + 2)
-   ├─ Deduplicate: Remove 1 overlap
-   └─ Final: 4 chunks (min=3, max=6)
-```
-
-### Actual Results
-```json
-{
-  "query": "What did Bethany Shay do in June 2022?",
-  "total_results": 4,
-  "semantic_count": 3,
-  "entity_count": 2,
-  "chunks": [
-    {
-      "id": 123,
-      "document_id": "sample_document_1",
-      "page_number": 9,
-      "text": "... Bethany Shay ...",
-      "person_names": ["bethany shay", ...],
-      "date_entities": ["june 2022", ...],
-      "distance": 0.234,
-      "source": "entity_search"
-    },
-    ...
-  ]
-}
-```
+### Milvus Limitations & Solutions
+| Limitation | Solution |
+|------------|----------|
+| ❌ No substring matching | ✅ Filter in Python after retrieval |
+| ❌ No case-insensitive search | ✅ Normalize to lowercase during ingestion |
+| ❌ Can't query without vector search | ✅ Use `collection.query()` for scalar-only queries |
+| ❌ 16384 query limit | ✅ Sufficient for most use cases (900 chunks) |
 
 ---
 

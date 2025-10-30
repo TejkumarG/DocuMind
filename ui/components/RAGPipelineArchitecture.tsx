@@ -3,44 +3,75 @@
 import MermaidDiagram from './MermaidDiagram'
 
 export default function RAGPipelineArchitecture() {
+  const ingestionFlow = `
+flowchart TD
+    Start(["📄 Document File"]) --> Load["Document Loader<br/>Split by pages"]
+    Load --> Pages["Pages Array<br/>Each page = 1 chunk"]
+
+    Pages --> Hash["Calculate SHA256<br/>File Hash"]
+    Hash --> Check{"Already<br/>Exists?"}
+    Check -->|Yes| Skip(["❌ Skip Document"])
+    Check -->|No| Process["Process Each Page"]
+
+    Process --> NER["🤖 spaCy NER<br/>Extract entities"]
+    NER --> Entities["Extract:<br/>PERSON, ORG, LOC<br/>DATE, CARDINAL"]
+    Entities --> Lower["Convert to lowercase<br/>Store as JSON"]
+
+    Process --> Embed["🤖 Sentence Transformer<br/>Generate embeddings"]
+    Embed --> Vectors["384-dim vectors"]
+
+    Lower --> Combine["Combine Metadata"]
+    Vectors --> Combine
+    Combine --> Insert["Insert into Milvus<br/>document_chunks"]
+    Insert --> Success(["✅ Complete"])
+
+    style NER fill:#ff9999
+    style Embed fill:#99ccff
+    style Insert fill:#99ff99
+  `
+
   const retrievalFlow = `
 flowchart TD
-    Query(["🔍 User Query"]) --> Parallel{"Parallel Processing"}
+    Query(["🔍 User Query"]) --> Parallel{"Run Both Scenarios<br/>in Parallel"}
 
-    %% Semantic Search Branch
-    Parallel --> Semantic["Path 1: Semantic Search"]
-    Semantic --> EmbedQ1["🤖 Sentence Transformer<br/>all-MiniLM-L6-v2"]
-    EmbedQ1 --> Vector1["Generate Query<br/>Embedding 384-dim"]
-    Vector1 --> MilvusS["Milvus Vector Search<br/>L2 Distance"]
-    MilvusS --> TopS["Top 3 Chunks<br/>by Similarity"]
+    %% Scenario 1: Direct Semantic
+    Parallel --> S1["Scenario 1:<br/>Direct Semantic"]
+    S1 --> S1_Embed["Step 1: 🤖 Embed query<br/>384-dim vector"]
+    S1_Embed --> S1_Search["Step 2: Milvus search<br/>on ALL documents"]
+    S1_Search --> S1_Top3["Get top 3 chunks"]
+    S1_Top3 --> S1_Docs["Extract document_ids<br/>from those 3"]
+    S1_Docs --> S1_Step3["Step 3: Milvus search<br/>ONLY in those documents"]
+    S1_Step3 --> S1_Result["Get top 5 chunks"]
 
-    %% Entity Search Branch
-    Parallel --> Entity["Path 2: Entity Search"]
-    Entity --> NERQ["🤖 spaCy NER<br/>en_core_web_md"]
-    NERQ --> ExtractQ["Extract Query Entities<br/>Convert to Lowercase"]
-    ExtractQ --> HasEnt{"Has<br/>Entities?"}
-    HasEnt -->|No| EmptyE(["Return Empty"])
-    HasEnt -->|Yes| EmbedQ2["🤖 Sentence Transformer<br/>all-MiniLM-L6-v2"]
-    EmbedQ2 --> Vector2["Generate Query<br/>Embedding 384-dim"]
-    Vector2 --> MilvusE["Milvus Vector Search<br/>Get Top 15 Candidates"]
-    MilvusE --> Filter["Python Filter:<br/>Match query entities with<br/>chunk entities<br/>Case-insensitive substring"]
-    Filter --> RankE["Rank by Semantic<br/>Similarity L2 Distance"]
-    RankE --> TopE["Top 3 Chunks<br/>with Entity Match"]
+    %% Scenario 2: Entity-based
+    Parallel --> S2["Scenario 2:<br/>Entity-based"]
+    S2 --> S2_NER["🤖 spaCy NER<br/>Extract entities"]
+    S2_NER --> S2_Has{"Has<br/>Entities?"}
+    S2_Has -->|No| S2_Empty(["0 chunks"])
+    S2_Has -->|Yes| S2_Query["Query ALL chunks<br/>NO semantic search"]
+    S2_Query --> S2_Filter["Filter by entity match<br/>Count matches per chunk"]
+    S2_Filter --> S2_Sort["Sort by match count"]
+    S2_Sort --> S2_Top2["Select top 2<br/>entity chunks"]
+    S2_Top2 --> S2_AllDocs["Extract document IDs<br/>from ALL matches"]
+    S2_AllDocs --> S2_Semantic["Semantic search<br/>within matched documents"]
+    S2_Semantic --> S2_Top2More["Select top 2<br/>semantic chunks"]
+    S2_Top2 --> S2_Combine["Combine"]
+    S2_Top2More --> S2_Combine
+    S2_Combine --> S2_Result["4 chunks total"]
 
-    %% Combine Results
-    TopS --> Combine["Combine Results"]
-    TopE --> Combine
-    EmptyE --> Combine
+    %% Final Combination
+    S1_Result --> Final["Combine Results"]
+    S2_Result --> Final
+    S2_Empty --> Final
 
-    Combine --> Dedup["Deduplicate by Chunk ID"]
-    Dedup --> Limit["Apply Limits:<br/>Min: 3 chunks<br/>Max: 6 chunks"]
-    Limit --> Final(["✅ Return Results"])
+    Final --> Dedup["Deduplicate by ID"]
+    Dedup --> Sort["Sort by distance"]
+    Sort --> Return(["✅ Return 6-9 chunks"])
 
-    style EmbedQ1 fill:#99ccff
-    style EmbedQ2 fill:#99ccff
-    style NERQ fill:#ff9999
-    style Filter fill:#ffcc99
-    style Final fill:#99ff99
+    style S1_Embed fill:#99ccff
+    style S2_NER fill:#ff9999
+    style S2_Filter fill:#ffcc99
+    style Return fill:#99ff99
   `
 
   return (
@@ -71,9 +102,20 @@ flowchart TD
         <div className="overflow-hidden rounded-2xl border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-purple-100 shadow-lg">
           <div className="p-6">
             <div className="mb-2 text-sm font-semibold text-purple-600">Results</div>
-            <div className="text-lg font-bold text-purple-900">3-6 chunks</div>
+            <div className="text-lg font-bold text-purple-900">6-9 chunks</div>
             <div className="mt-2 text-xs text-purple-700">Deduplicated & ranked</div>
           </div>
+        </div>
+      </div>
+
+      {/* Ingestion Flow */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div className="border-b border-slate-200 bg-gradient-to-r from-green-50 via-emerald-50 to-teal-50 px-8 py-6">
+          <h3 className="text-xl font-semibold text-slate-900">Document Ingestion Pipeline</h3>
+          <p className="mt-1 text-sm text-slate-600">Processing documents into vector embeddings with entity extraction</p>
+        </div>
+        <div className="p-8">
+          <MermaidDiagram chart={ingestionFlow} id="ingestion-flow" />
         </div>
       </div>
 
@@ -81,44 +123,69 @@ flowchart TD
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="border-b border-slate-200 bg-gradient-to-r from-purple-50 via-blue-50 to-cyan-50 px-8 py-6">
           <h3 className="text-xl font-semibold text-slate-900">Hybrid Retrieval Architecture</h3>
-          <p className="mt-1 text-sm text-slate-600">Parallel semantic search + entity matching for optimal results</p>
+          <p className="mt-1 text-sm text-slate-600">Two parallel scenarios: semantic search + entity-based filtering</p>
         </div>
         <div className="p-8">
           <MermaidDiagram chart={retrievalFlow} id="retrieval-flow" />
 
           <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2">
             <div className="rounded-2xl border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100 p-6 shadow-md">
-              <h5 className="mb-3 text-lg font-bold text-blue-900">Path 1: Semantic Search</h5>
+              <h5 className="mb-3 text-lg font-bold text-blue-900">Scenario 1: Direct Semantic</h5>
               <div className="space-y-2 text-sm text-blue-800">
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                  <div>Encodes query with Sentence Transformer</div>
+                  <div>Semantic search on ALL docs → top 3 chunks</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                  <div>Searches Milvus by L2 distance (vector similarity)</div>
+                  <div>Extract document_ids from those 3 chunks</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-blue-500 flex-shrink-0"></div>
-                  <div>Returns top 3 most similar chunks</div>
+                  <div>Semantic search within those docs → top 5</div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <div className="mt-1 h-2 w-2 rounded-full bg-blue-500 flex-shrink-0"></div>
+                  <div><strong>Returns: 5 chunks</strong></div>
                 </div>
               </div>
             </div>
             <div className="rounded-2xl border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-purple-100 p-6 shadow-md">
-              <h5 className="mb-3 text-lg font-bold text-purple-900">Path 2: Entity Search</h5>
+              <h5 className="mb-3 text-lg font-bold text-purple-900">Scenario 2: Entity-Based</h5>
               <div className="space-y-2 text-sm text-purple-800">
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-purple-500 flex-shrink-0"></div>
-                  <div>Extracts entities (names, dates, orgs) with spaCy NER</div>
+                  <div>Extract entities with spaCy NER</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-purple-500 flex-shrink-0"></div>
-                  <div>Filters top 15 candidates by entity match (substring)</div>
+                  <div>Query ALL 900+ chunks (no semantic!)</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-purple-500 flex-shrink-0"></div>
-                  <div>Returns top 3 ranked by semantic similarity</div>
+                  <div>Filter by entity match → sort by count</div>
                 </div>
+                <div className="flex items-start gap-2">
+                  <div className="mt-1 h-2 w-2 rounded-full bg-purple-500 flex-shrink-0"></div>
+                  <div>Top 2 entity + 2 semantic from matched docs</div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <div className="mt-1 h-2 w-2 rounded-full bg-purple-500 flex-shrink-0"></div>
+                  <div><strong>Returns: 4 chunks</strong></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* NEW: Key Difference Highlight */}
+          <div className="mt-6 rounded-xl border-2 border-orange-200 bg-orange-50 p-6">
+            <h5 className="mb-3 font-bold text-orange-900">🔑 Key Difference</h5>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 text-sm">
+              <div className="text-orange-800">
+                <strong>Scenario 1 (Semantic):</strong> Uses vector similarity throughout. Fast but may miss exact entity matches if semantically distant.
+              </div>
+              <div className="text-orange-800">
+                <strong>Scenario 2 (Entity):</strong> Filters ALL chunks by entity first, then uses semantic only for expansion. Guarantees entity presence.
               </div>
             </div>
           </div>
@@ -166,7 +233,7 @@ flowchart TD
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-red-500 flex-shrink-0"></div>
-                  <div><strong>Entities:</strong> PERSON, ORG, GPE, LOC, DATE</div>
+                  <div><strong>Entities:</strong> PERSON, ORG, GPE, LOC, DATE, CARDINAL</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <div className="mt-1 h-2 w-2 rounded-full bg-red-500 flex-shrink-0"></div>
@@ -240,12 +307,12 @@ flowchart TD
               <div className="text-xs text-slate-600">Distance Metric</div>
             </div>
             <div className="text-center rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-2xl font-bold text-slate-900">3-6</div>
+              <div className="text-2xl font-bold text-slate-900">6-9</div>
               <div className="text-xs text-slate-600">Results Returned</div>
             </div>
             <div className="text-center rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-2xl font-bold text-slate-900">5</div>
-              <div className="text-xs text-slate-600">Entity Types</div>
+              <div className="text-2xl font-bold text-slate-900">900+</div>
+              <div className="text-xs text-slate-600">Total Chunks</div>
             </div>
           </div>
         </div>
@@ -261,40 +328,40 @@ flowchart TD
             <div className="rounded-xl border border-blue-200 bg-blue-50 p-6">
               <div className="mb-3 flex items-center gap-2">
                 <div className="h-3 w-3 rounded-full bg-blue-500"></div>
-                <h5 className="font-bold text-blue-900">Semantic Search</h5>
+                <h5 className="font-bold text-blue-900">Semantic Power</h5>
               </div>
               <p className="text-sm text-blue-800">
-                Catches similar meaning even without exact keyword matches. Great for concept-based queries.
+                Catches similar meaning even without exact keyword matches. Great for concept-based queries and finding related content.
               </p>
             </div>
             <div className="rounded-xl border border-purple-200 bg-purple-50 p-6">
               <div className="mb-3 flex items-center gap-2">
                 <div className="h-3 w-3 rounded-full bg-purple-500"></div>
-                <h5 className="font-bold text-purple-900">Entity Matching</h5>
+                <h5 className="font-bold text-purple-900">Entity Precision</h5>
               </div>
               <p className="text-sm text-purple-800">
-                Ensures specific names, dates, and organizations are found accurately. Critical for precise queries.
+                Queries ALL chunks by entity match first. Ensures specific names, dates, numbers, and organizations are found accurately.
               </p>
             </div>
             <div className="rounded-xl border border-green-200 bg-green-50 p-6">
               <div className="mb-3 flex items-center gap-2">
                 <div className="h-3 w-3 rounded-full bg-green-500"></div>
-                <h5 className="font-bold text-green-900">Combined Power</h5>
+                <h5 className="font-bold text-green-900">Combined Results</h5>
               </div>
               <p className="text-sm text-green-800">
-                Deduplicated and ranked by L2 distance. Best of both approaches for comprehensive retrieval.
+                Deduplicates overlaps and ranks by L2 distance. Best of both approaches for comprehensive and accurate retrieval.
               </p>
             </div>
           </div>
 
           <div className="mt-6 rounded-xl border-2 border-amber-200 bg-amber-50 p-6">
-            <h5 className="mb-3 font-bold text-amber-900">Technical Details</h5>
+            <h5 className="mb-3 font-bold text-amber-900">Technical Implementation</h5>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 text-sm text-amber-800">
               <div>
-                <strong>Model Consistency:</strong> Both ingestion and retrieval use the same models (all-MiniLM-L6-v2 and en_core_web_md) to ensure vector space alignment.
+                <strong>Model Consistency:</strong> Both ingestion and retrieval use identical models (all-MiniLM-L6-v2 and en_core_web_md) ensuring vector space alignment.
               </div>
               <div>
-                <strong>Milvus Workaround:</strong> Since Milvus doesn't support substring matching, we fetch candidates via vector search and filter in Python.
+                <strong>Entity-First Approach:</strong> Scenario 2 queries ALL chunks without semantic filtering, ensuring entity matches aren't missed due to semantic distance.
               </div>
             </div>
           </div>

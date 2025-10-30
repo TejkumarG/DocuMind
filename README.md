@@ -24,15 +24,42 @@ This project contains multiple independent services orchestrated with Docker Com
    - `milvus-etcd` - Metadata storage
    - `milvus-minio` - Object storage
 
-5. **PDF-to-MD Converter** (Utility)
+5. **PostgreSQL** - Chat History Database (Port 5432)
+   - Stores conversation history
+   - Used by UI service
+
+6. **PDF-to-MD Converter** (Utility)
    - Runs via exec command
    - No exposed ports
    - Use profile: `pdf-tools`
 
 ### Optional Services
 
-6. **Attu** - Milvus Management GUI (Port 3001)
+7. **Attu** - Milvus Management GUI (Port 3001)
    - Use profile: `monitoring`
+
+## RAG Retrieval Architecture
+
+The RAG service implements a **Hybrid Retrieval System** with two parallel scenarios:
+
+### Scenario 1: Direct Semantic Search
+- Pure vector similarity search
+- Fast and efficient
+- Returns 5 chunks
+
+### Scenario 2: Entity-Based Search
+- Extracts entities using spaCy NER
+- Queries ALL chunks (900+) without semantic filtering
+- Filters by entity match in Python
+- Sorts by entity match count
+- Returns 4 chunks (2 entity + 2 semantic expansion)
+
+### Combined Results
+- Deduplicates overlapping chunks
+- Returns 6-9 unique chunks maximum
+- Best of both: semantic understanding + entity precision
+
+**See detailed flow**: [RAG Pipeline Architecture](./rag-pipeline/ARCHITECTURE_FLOW.md)
 
 ## Quick Start
 

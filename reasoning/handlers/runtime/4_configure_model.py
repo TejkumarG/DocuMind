@@ -12,6 +12,7 @@ def configure_dspy_model():
         model=settings.openai_model,
         api_key=settings.openai_api_key,
         temperature=settings.openai_temperature,
+        max_tokens=1000,  # Ensure complete responses (adjust as needed)
     )
 
     dspy.settings.configure(lm=lm)
