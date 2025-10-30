@@ -1,0 +1,233 @@
+services:
+  # ============================================
+  # PDF to Markdown Converter Service
+  # ============================================
+  pdf-converter:
+    build:
+      context: ./pdf-to-md
+      dockerfile: Dockerfile
+    container_name: pdf-to-md
+    volumes:
+      - ./pdf-to-md/data:/app/data
+      - ./pdf-to-md/logs:/app/logs
+      - ./pdf-to-md/src:/app/src
+      - ./pdf-to-md/config:/app/config
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - ./pdf-to-md/.env
+    stdin_open: true
+    tty: true
+    networks:
+      - app-network
+    profiles:
+      - pdf-tools
+
+  # ============================================
+  # Milvus Vector Database (3 containers)
+  # ============================================
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus_etcd:/etcd
+    networks:
+      - app-network
+    command: etcd -advertise-client-urls=http://milvus-etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: milvus-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - milvus_minio:/minio_data
+    networks:
+      - app-network
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus-standalone:
+    image: milvusdb/milvus:v2.3.3
+    container_name: milvus
+    restart: unless-stopped
+    depends_on:
+      milvus-etcd:
+        condition: service_healthy
+      milvus-minio:
+        condition: service_healthy
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    networks:
+      - app-network
+    command: ["milvus", "run", "standalone"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+
+  # ============================================
+  # Attu - Milvus Management GUI (Latest)
+  # ============================================
+  attu:
+    image: zilliz/attu:v2.6
+    container_name: milvus-attu
+    restart: unless-stopped
+    depends_on:
+      milvus-standalone:
+        condition: service_healthy
+    environment:
+      MILVUS_URL: milvus-standalone:19530
+    ports:
+      - "3001:3000"
+    networks:
+      - app-network
+    profiles:
+      - monitoring
+
+  # ============================================
+  # PostgreSQL - Chat History Database
+  # ============================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: chat-history-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatuser
+      POSTGRES_PASSWORD: chatpass
+      POSTGRES_DB: chat_history
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatuser -d chat_history"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # RAG Service - FastAPI #1 (Port 8000)
+  # ============================================
+  rag-service:
+    build:
+      context: ./rag-pipeline
+      dockerfile: Dockerfile
+    container_name: rag-service
+    restart: unless-stopped
+    depends_on:
+      milvus-standalone:
+        condition: service_healthy
+    environment:
+      MILVUS_HOST: milvus-standalone
+      MILVUS_PORT: "19530"
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    volumes:
+      - ./rag-pipeline/data:/app/data
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # Reasoning Service - FastAPI #2 (Port 8001)
+  # ============================================
+  reasoning-api:
+    build:
+      context: ./reasoning
+      dockerfile: Dockerfile
+    container_name: reasoning-api
+    restart: unless-stopped
+    depends_on:
+      rag-service:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - RETRIEVAL_API_URL=http://rag-service:8000
+    env_file:
+      - ./reasoning/.env
+    volumes:
+      - ./reasoning/data:/app/data
+      - ./reasoning/artifacts:/app/artifacts
+      - ./reasoning/logs:/app/logs
+    networks:
+      - app-network
+    command: uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+
+  # ============================================
+  # UI Service - Frontend (Port 3000)
+  # ============================================
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: ai-architecture-ui
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      reasoning-api:
+        condition: service_started
+      rag-service:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://chatuser:chatpass@postgres:5432/chat_history?schema=public
+    networks:
+      - app-network
+
+# ============================================
+# Shared Network
+# ============================================
+networks:
+  app-network:
+    driver: bridge
+    name: ai-architecture-network
+
+# ============================================
+# Persistent Volumes
+# ============================================
+volumes:
+  milvus_etcd:
+    driver: local
+  milvus_minio:
+    driver: local
+  milvus_data:
+    driver: local
+  postgres_data:
+    driver: local
