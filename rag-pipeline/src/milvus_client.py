@@ -42,6 +42,7 @@ class MilvusClient:
             FieldSchema(name="location_names", dtype=DataType.VARCHAR, max_length=5000),
             FieldSchema(name="organization_names", dtype=DataType.VARCHAR, max_length=5000),
             FieldSchema(name="date_entities", dtype=DataType.VARCHAR, max_length=5000),
+            FieldSchema(name="file_numbers", dtype=DataType.VARCHAR, max_length=5000),
             FieldSchema(name="other_entities", dtype=DataType.VARCHAR, max_length=5000),
         ]
 
@@ -94,6 +95,7 @@ class MilvusClient:
             [chunk["location_names"] for chunk in chunks],
             [chunk["organization_names"] for chunk in chunks],
             [chunk["date_entities"] for chunk in chunks],
+            [chunk["file_numbers"] for chunk in chunks],
             [chunk["other_entities"] for chunk in chunks],
         ]
 
@@ -119,7 +121,7 @@ class MilvusClient:
             param=search_params,
             limit=top_k,
             output_fields=["document_id", "page_number", "text", "person_names",
-                          "location_names", "organization_names", "date_entities", "other_entities"]
+                          "location_names", "organization_names", "date_entities", "file_numbers", "other_entities"]
         )
         return results
 
@@ -138,7 +140,7 @@ class MilvusClient:
             expr=filter_expr,
             limit=top_k,
             output_fields=["document_id", "page_number", "text", "person_names",
-                          "location_names", "organization_names", "date_entities", "other_entities"]
+                          "location_names", "organization_names", "date_entities", "file_numbers", "other_entities"]
         )
         return results
 
@@ -151,7 +153,7 @@ class MilvusClient:
 
         if output_fields is None:
             output_fields = ["id", "document_id", "page_number", "text", "person_names",
-                           "location_names", "organization_names", "date_entities", "other_entities"]
+                           "location_names", "organization_names", "date_entities", "file_numbers", "other_entities"]
 
         # Query all chunks (Milvus limit is 16384 per query)
         results = self.collection.query(

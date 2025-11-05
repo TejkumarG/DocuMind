@@ -56,6 +56,8 @@ async def ask_question(request: QuestionRequest):
     4. Configure model
     5. Reason + Verify (2 LLM calls)
     6. Return answer
+
+    Note: A unique timestamp is added to prevent OpenAI prompt caching
     """
     try:
         question = request.question
@@ -66,14 +68,21 @@ async def ask_question(request: QuestionRequest):
         # Step 2: Get RAG model
         rag = get_rag_model()
 
-        # Step 3: Run Reason + Verify
-        result = rag.forward(context=context, question=question)
+        # Step 3: Run Reason + Verify with cache-busting
+        # Add unique UUID to prevent OpenAI caching
+        import uuid
+        cache_buster = f"\n[RequestID:{uuid.uuid4().hex}]"
+
+        # Append cache buster to question to make it unique
+        unique_question = question + cache_buster
+
+        result = rag.forward(context=context, question=unique_question)
 
         # Extract answer
         answer = result.verified_answer if hasattr(result, 'verified_answer') else str(result)
 
         return AnswerResponse(
-            question=question,
+            question=question,  # Return original question without cache buster
             answer=answer,
             context_used=context,
             reasoning=None  # Can add reasoning trace if needed

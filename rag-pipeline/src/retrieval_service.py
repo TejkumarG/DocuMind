@@ -75,14 +75,15 @@ class RetrievalService:
         location_names = json.loads(query_entities["location_names"])
         organization_names = json.loads(query_entities["organization_names"])
         date_entities = json.loads(query_entities["date_entities"])
+        file_numbers = json.loads(query_entities["file_numbers"])
         other_entities = json.loads(query_entities["other_entities"])
 
         logger.info(f"Extracted entities from query: persons={person_names}, "
                    f"locations={location_names}, orgs={organization_names}, "
-                   f"dates={date_entities}, others={other_entities}")
+                   f"dates={date_entities}, files={file_numbers}, others={other_entities}")
 
         # If no entities found, return empty
-        if not (person_names or location_names or organization_names or date_entities or other_entities):
+        if not (person_names or location_names or organization_names or date_entities or file_numbers or other_entities):
             logger.info("No entities found in query, returning empty results")
             return []
 
@@ -97,10 +98,18 @@ class RetrievalService:
                 chunk_location_names = json.loads(chunk["location_names"])
                 chunk_org_names = json.loads(chunk["organization_names"])
                 chunk_date_entities = json.loads(chunk["date_entities"])
+                chunk_file_numbers = json.loads(chunk["file_numbers"])
                 chunk_other_entities = json.loads(chunk["other_entities"])
 
                 # COUNT how many query entities match this chunk
                 entity_match_count = 0
+
+                # Check file numbers FIRST (highest priority - exact match)
+                for query_file in file_numbers:
+                    for chunk_file in chunk_file_numbers:
+                        if query_file == chunk_file:  # Exact match for file numbers
+                            entity_match_count += 10  # Weight file number matches heavily!
+                            break
 
                 # Check person names
                 for query_person in person_names:
@@ -152,6 +161,7 @@ class RetrievalService:
                         "location_names": chunk_location_names,
                         "organization_names": chunk_org_names,
                         "date_entities": chunk_date_entities,
+                        "file_numbers": chunk_file_numbers,
                         "other_entities": chunk_other_entities,
                         "entity_match_count": entity_match_count
                     })
@@ -296,12 +306,13 @@ class RetrievalService:
         location_names = json.loads(query_entities["location_names"])
         organization_names = json.loads(query_entities["organization_names"])
         date_entities = json.loads(query_entities["date_entities"])
+        file_numbers = json.loads(query_entities["file_numbers"])
         other_entities = json.loads(query_entities["other_entities"])
 
-        has_entities = bool(person_names or location_names or organization_names or date_entities or other_entities)
+        has_entities = bool(person_names or location_names or organization_names or date_entities or file_numbers or other_entities)
 
         logger.info(f"Scenario 2: Extracted entities - persons={person_names}, locations={location_names}, "
-                   f"orgs={organization_names}, dates={date_entities}, others={other_entities}")
+                   f"orgs={organization_names}, dates={date_entities}, files={file_numbers}, others={other_entities}")
 
         # 2. If NO entities, return empty list
         if not has_entities:
@@ -454,12 +465,13 @@ class RetrievalService:
         location_names = json.loads(query_entities["location_names"])
         organization_names = json.loads(query_entities["organization_names"])
         date_entities = json.loads(query_entities["date_entities"])
+        file_numbers = json.loads(query_entities["file_numbers"])
         other_entities = json.loads(query_entities["other_entities"])
 
-        has_entities = bool(person_names or location_names or organization_names or date_entities or other_entities)
+        has_entities = bool(person_names or location_names or organization_names or date_entities or file_numbers or other_entities)
 
         logger.info(f"Extracted entities - persons={person_names}, locations={location_names}, "
-                   f"orgs={organization_names}, dates={date_entities}, others={other_entities}")
+                   f"orgs={organization_names}, dates={date_entities}, files={file_numbers}, others={other_entities}")
         logger.info(f"Entities found: {has_entities}")
 
         if not has_entities:

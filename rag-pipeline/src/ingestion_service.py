@@ -75,6 +75,7 @@ class IngestionService:
                 "location_names": page["location_names"],
                 "organization_names": page["organization_names"],
                 "date_entities": page["date_entities"],
+                "file_numbers": page["file_numbers"],
                 "other_entities": page["other_entities"]
             })
 
